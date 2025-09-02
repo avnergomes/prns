@@ -8,7 +8,7 @@
   <style>
     html,body,#map{height:100%;margin:0}
     .topbar{position:fixed;inset:0 0 auto 0;z-index:1000;display:flex;gap:.5rem;align-items:center;background:#fff;border-bottom:1px solid #e5e7eb;padding:.5rem .75rem}
-    .version{margin-left:auto;color:#666;font-size:.85rem}
+    .version{margin-left:auto;color:#666;font-size:.85rem;white-space:nowrap}
     #map{position:absolute;inset:44px 0 0 0}
     .btn{border:1px solid #d1d5db;background:#fff;padding:.35rem .6rem;border-radius:8px;font-weight:600;cursor:pointer}
     .btn:hover{background:#f9fafb}
@@ -25,15 +25,19 @@
   <script>
   // --- mapa base ---
   const map = L.map('map', { center: [-24.5,-51.5], zoom: 7, preferCanvas: true });
+
   const streets = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png', {
-    attribution: '© OSM • © CARTO', maxZoom: 20
+    attribution: '© OpenStreetMap • © CARTO', maxZoom: 20
   }).addTo(map);
+
   const esri = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
     attribution: 'Imagery: Esri/Maxar', maxZoom: 19
   });
-  L.control.layers({ 'Streets': streets, 'Satélite (Esri)': esri }, {}, { collapsed: false }).addTo(map);
 
-  // --- util de estilo rápido ---
+  const baseLayers = { 'Streets': streets, 'Satélite (Esri)': esri };
+  const layerControl = L.control.layers(baseLayers, {}, { collapsed:false }).addTo(map);
+
+  // --- estilos rápidos ---
   const styles = {
     declividade: { color:'#c51b7d', weight:2, fillOpacity:0.20 },
     altimetria:  { color:'#542788', weight:2, fillOpacity:0.20 },
@@ -48,7 +52,7 @@
     sigarh:      { color:'#0571b0', weight:2, fillOpacity:0.25 }
   };
 
-  // --- lista de camadas (apontando para /data) ---
+  // --- lista de camadas (em /data) ---
   const LAYERS = [
     { name:'Declividade (OTTO)', file:'declividade__declividade_otto.geojson', key:'declividade', type:'poly' },
     { name:'Altimetria (OTTO)',  file:'altimetria__altimetria_otto.geojson',  key:'altimetria',  type:'poly' },
@@ -63,18 +67,17 @@
     { name:'SIGARH',             file:'sigarh.geojson',                        key:'sigarh',      type:'poly' }
   ];
 
-  const overlays = {};
   const addedLayers = [];
 
   function addGeoJson(def, data){
     const st = styles[def.key] || { color:'#555', weight:2, fillOpacity:0.2 };
     const layer = L.geoJSON(data, {
-      style: (f)=>st,
+      style: st,
       pointToLayer: (f, latlng) => {
         if(def.type==='point'){
-          return L.circleMarker(latlng, { radius:5, color:st.color, weight:2, fillOpacity:st.fillOpacity||0.8 });
+          return L.circleMarker(latlng, { radius:5, color:st.color, weight:2, fillOpacity:st.fillOpacity ?? 0.8 });
         }
-        return L.circleMarker(latlng, { radius:5, color:st.color, weight:2, fillOpacity:0.8 });
+        return L.marker(latlng); // (não será chamado para polígonos/linhas)
       },
       onEachFeature: (feat, lyr) => {
         const p = feat && feat.properties || {};
@@ -83,36 +86,46 @@
         if(html) lyr.bindPopup(html);
       }
     });
-    overlays[def.name] = layer;
-    addedLayers.push(layer);
+
     layer.addTo(map);
+    addedLayers.push(layer);
+    layerControl.addOverlay(layer, def.name);
   }
 
   async function loadAll(){
     for(const def of LAYERS){
+      const url = `data/${def.file}`;
       try{
-        const url = `data/${def.file}`;
         const res = await fetch(url, { cache:'no-cache' });
-        const gj = await res.json();
+        if(!res.ok){
+          const txt = await res.text().catch(()=> '');
+          throw new Error(`HTTP ${res.status} ${res.statusText} ao buscar ${url}\n${txt.slice(0,180)}`);
+        }
+        let gj;
+        try{
+          gj = await res.json();
+        }catch(parseErr){
+          const txt = await res.text().catch(()=> '');
+          throw new Error(`Falha ao interpretar JSON em ${def.name}. Detalhe: ${parseErr.message}\nPrévia: ${txt.slice(0,180)}`);
+        }
         addGeoJson(def, gj);
       }catch(e){
-        console.error(`Falha ao carregar ${def.name}`, e);
+        console.error(`Falha ao carregar ${def.name}:`, e);
+        alert(`Falha ao carregar ${def.name} (${url}). Veja o console para detalhes.`);
       }
     }
-    // atualizar controle com as sobreposições carregadas
-    const ctl = L.control.layers({}, overlays, { collapsed:false }).addTo(map);
   }
 
-  loadAll().then(() => console.log('Camadas carregadas.'));
+  loadAll().then(()=>console.log('Camadas carregadas.'));
 
   document.getElementById('fitAll').onclick = () => {
-    const visible = addedLayers.filter(l => map.hasLayer(l));
-    if(!visible.length) return;
-    const group = L.featureGroup(visible);
+    const visibles = addedLayers.filter(l => map.hasLayer(l));
+    if(!visibles.length) return;
+    const group = L.featureGroup(visibles);
     map.fitBounds(group.getBounds().pad(0.08));
   };
 
-  // assinatura também no rodapé do mapa
+  // assinatura no rodapé do mapa
   map.attributionControl.setPrefix(false);
   map.attributionControl.addAttribution('v1.0 (c) Avner Gomes');
   </script>
